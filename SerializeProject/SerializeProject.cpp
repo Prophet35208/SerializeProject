@@ -275,23 +275,148 @@ void PrintList(ListNode* head) {
     }
 }
 
+// Сравнение списков для определения правильности работы сериализации. Только для отладки.
+bool CompareLists(ListNode* head1, ListNode* head2) {
+    if (!head1 && !head2) return true;
+    if (!head1 || !head2) return false;
+
+    // Собираем узлы первого списка в вектор
+    vector<ListNode*> nodes1;
+    for (ListNode* curr = head1; curr; curr = curr->next) {
+        nodes1.push_back(curr);
+    }
+
+    // Собираем узлы второго списка в вектор
+    vector<ListNode*> nodes2;
+    for (ListNode* curr = head2; curr; curr = curr->next) {
+        nodes2.push_back(curr);
+    }
+
+    // Проверяем количество узлов
+    if (nodes1.size() != nodes2.size()) {
+        cout << "Разное количество узлов: " << nodes1.size() << " vs " << nodes2.size() << endl;
+        return false;
+    }
+
+    size_t node_count = nodes1.size();
+
+    // Сравниваем каждый узел
+    for (size_t i = 0; i < node_count; ++i) {
+        ListNode* node1 = nodes1[i];
+        ListNode* node2 = nodes2[i];
+
+        // Сравниваем data
+        if (node1->data != node2->data) {
+            cout << "Узел " << i << ": данные не совпадают: \""
+                << node1->data << "\" vs \"" << node2->data << "\"" << endl;
+            return false;
+        }
+
+        // Проверяем prev связи
+        if ((node1->prev == nullptr) != (node2->prev == nullptr)) {
+            cout << "Узел " << i << ": prev не совпадает" << endl;
+            return false;
+        }
+
+        // Проверяем next связи
+        if ((node1->next == nullptr) != (node2->next == nullptr)) {
+            cout << "Узел " << i << ": next не совпадает" << endl;
+            return false;
+        }
+
+        // Проверяем rand связи (по индексам)
+        int rand_idx1 = -1;
+        if (node1->rand) {
+            auto it = find(nodes1.begin(), nodes1.end(), node1->rand);
+            if (it != nodes1.end()) {
+                rand_idx1 = distance(nodes1.begin(), it);
+            }
+        }
+
+        int rand_idx2 = -1;
+        if (node2->rand) {
+            auto it = find(nodes2.begin(), nodes2.end(), node2->rand);
+            if (it != nodes2.end()) {
+                rand_idx2 = distance(nodes2.begin(), it);
+            }
+        }
+
+        if (rand_idx1 != rand_idx2) {
+            cout << "Узел " << i << ": rand не совпадает: "
+                << rand_idx1 << " vs " << rand_idx2 << endl;
+            return false;
+        }
+    }
+
+    return true;
+}
+
+// Функция сравнения списка из inlet и списка из бинарного файла. Только для отладки.
+bool CompareWithDeserialized(ListNode* original_head, const string& binary_filename) {
+
+    // Десериализуем список из бинарного файла
+    ListNode* deserialized_head = DeserializeList(binary_filename);
+    if (!deserialized_head) {
+        return false;
+    }
+
+    // Сравниваем списки
+    bool is_equal = CompareLists(original_head, deserialized_head);
+
+    if (is_equal) {
+        cout << "\nСписки  совпадают";
+    }
+    else {
+        cout << "\n Ошибка: списки не совпадают" << endl;
+    }
+
+    // Очищаем десериализованный список
+    DestroyList(deserialized_head);
+
+    return is_equal;
+}
+
 
 int main()
 {
     setlocale(LC_ALL, "Rus");
 
-    ListNode* head = BuildListFromFile("inlet.in");
+    const string input_filename = "inlet.in";
+    const string binary_filename = "outlet.out";
+
+    // 1. Строим список из входного файла
+    cout << "Читаем список из файла: " << input_filename << endl;
+    auto result = BuildListFromFile(input_filename);  // получаем pair
+
+    ListNode* head = result.first;                    // забираем голову списка
+    vector<NodeEntry> entries = result.second;        // забираем entries
 
     if (!head) {
         cerr << "Не удалось построить список" << endl;
         return 1;
     }
 
-    // Печатаем список 
-    PrintList(head);
+    // Сериализуем список в бинарный файл
+    cout << "\nСериализуем список в " << binary_filename << endl;
+    if (!SerializeList(head, entries, binary_filename)) {
+        cerr << "Ошибка сериализации" << endl;
+        DestroyList(head);
+        return 1;
+    }
 
-    // Очищаем память
+    // Сравниваем исходный список с десериализованным из бинарного файла
+    bool comparison_result = CompareWithDeserialized(head, binary_filename);
+
+    // Очищаем исходный список
     DestroyList(head);
 
-    return 0;
+    cout << "\n  Итог " << endl;
+    if (comparison_result) {
+        cout << "Все тесты пройдены успешно" << endl;
+        return 0;
+    }
+    else {
+        cout << "Тесты не пройдены" << endl;
+        return 1;
+    }
 }
