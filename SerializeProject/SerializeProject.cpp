@@ -21,12 +21,12 @@ struct NodeEntry {
 };
 
 // 
-ListNode* BuildListFromFile(const string& filename) {
+pair<ListNode*, vector<NodeEntry>> BuildListFromFile(const string& filename) {
 
     ifstream file(filename);
     if (!file.is_open()) {
         cerr << "Не получилось открыть файл: " << filename << endl;
-        return nullptr;
+        return { nullptr, {} };
     }
 
     // Составим временный список узлов, чтобы легко задать параметр rand для конечных узлов
@@ -84,7 +84,7 @@ ListNode* BuildListFromFile(const string& filename) {
 
     // Если не создано ни одного узла
     if (entries.empty()) {
-        return nullptr;
+        return { nullptr, {} };
     }
 
     // Устанавливаем rand ссылки
@@ -99,7 +99,7 @@ ListNode* BuildListFromFile(const string& filename) {
     }
 
     // Возвращаем указатель на голову списка
-    return entries[0].node;
+    return { entries[0].node, entries };
 }
 
 // Функция для освобождения памяти списка
@@ -109,6 +109,135 @@ void DestroyList(ListNode* head) {
         delete head;
         head = next;
     }
+}
+
+// Будем использовать vector<NodeEntry> из BuildListFromFile, чтобы не составлять список второй раз.
+// Формат бинарного файла следующий
+// 
+// [4 байта] node_count: количество узлов(uint32_t). Пишем для удобства десериализации
+// Далее node_count раз повторяется:
+// [4 байта] data_size : размер строки в байтах(uint32_t) 
+// [data_size байт] data : строка в UTF - 8 
+// [4 байта] rand_index : индекс узла для rand(int32_t, -1 если nullptr)
+bool SerializeList(ListNode* head, const vector<NodeEntry>& entries, const string& filename) {
+    ofstream file(filename, ios::binary);
+    if (!file.is_open()) {
+        cerr << "Не удалось создать файл: " << filename << endl;
+        return false;
+    }
+
+    uint32_t node_count = static_cast<uint32_t>(entries.size());
+
+    // Записываем количество узлов
+    file.write(reinterpret_cast<const char*>(&node_count), sizeof(node_count));
+
+    // Записываем каждый узел (используем готовые entries!)
+    for (size_t i = 0; i < entries.size(); ++i) {
+        const ListNode* node = entries[i].node;
+
+        // Длина строки в байтах
+        uint32_t data_size = static_cast<uint32_t>(node->data.size());
+        file.write(reinterpret_cast<const char*>(&data_size), sizeof(data_size));
+
+        // Сама строка
+        file.write(node->data.c_str(), data_size);
+
+        // rand_index берём из entries, зачем делать лишнюю работу
+        int32_t rand_index = entries[i].rand_index;
+        file.write(reinterpret_cast<const char*>(&rand_index), sizeof(rand_index));
+    }
+
+    file.close();
+    cout << "Список сериализован в файл " << filename << endl;
+    return true;
+}
+
+ListNode* DeserializeList(const string& filename) {
+    ifstream file(filename, ios::binary);
+    if (!file.is_open()) {
+        cerr << "Не удалось открыть файл: " << filename << endl;
+        return nullptr;
+    }
+
+    // Читаем заголовок (кол-во узлов)
+    uint32_t node_count;
+    file.read(reinterpret_cast<char*>(&node_count), sizeof(node_count));
+
+    if (file.gcount() != sizeof(node_count)) {
+        cerr << "Ошибка чтения количества узлов" << endl;
+        return nullptr;
+    }
+
+    if (node_count == 0) {
+        return nullptr;
+    }
+
+    // Векторы для хранения данных
+    vector<ListNode*> nodes(node_count, nullptr);
+    vector<int32_t> rand_indices(node_count); // Можем хранить индексы rand в памяти. Даже при 10^6 узлов это не больше, чем 4 Мб оперативы
+
+    // Читаем все узлы 
+    for (uint32_t i = 0; i < node_count; ++i) {
+        // Читаем размер строки
+        uint32_t data_size;
+        file.read(reinterpret_cast<char*>(&data_size), sizeof(data_size));
+
+        if (file.gcount() != sizeof(data_size)) {
+            cerr << "Ошибка чтения размера данных для узла " << i << endl;
+            // Очищаем уже созданные узлы при ошибке
+            for (uint32_t j = 0; j < i; ++j) delete nodes[j];
+            return nullptr;
+        }
+
+        // Читаем строку
+        string data(data_size, '\0');
+        file.read(&data[0], data_size);
+
+        if (static_cast<uint32_t>(file.gcount()) != data_size) {
+            cerr << "Ошибка чтения данных для узла " << i << endl;
+            // Очищаем уже созданные узлы при ошибке
+            for (uint32_t j = 0; j < i; ++j) delete nodes[j];
+            return nullptr;
+        }
+
+        // Читаем rand_index
+        file.read(reinterpret_cast<char*>(&rand_indices[i]), sizeof(int32_t));
+
+        if (file.gcount() != sizeof(int32_t)) {
+            cerr << "Ошибка чтения rand_index для узла " << i << endl;
+            // Очищаем уже созданные узлы при ошибке
+            for (uint32_t j = 0; j < i; ++j) delete nodes[j];
+            return nullptr;
+        }
+
+        // Создаём узел (сейчас только data, связи prev, next и rand чуть позже)
+        nodes[i] = new ListNode();
+        nodes[i]->data = move(data);
+        // prev, next, rand пока nullptr
+    }
+
+    // Устанавливаем связи
+    for (uint32_t i = 0; i < node_count; ++i) {
+        // Связываем prev/next
+        if (i > 0) {
+            nodes[i]->prev = nodes[i - 1];
+        }
+        if (i < node_count - 1) {
+            nodes[i]->next = nodes[i + 1];
+        }
+
+        // Связываем rand
+        int32_t rand_idx = rand_indices[i];
+        if (rand_idx >= 0 && rand_idx < static_cast<int32_t>(node_count)) {
+            nodes[i]->rand = nodes[rand_idx];
+        }
+        // Если rand_idx == -1, rand остается nullptr
+    }
+
+    file.close();
+    cout << "Список десериализован из файла " << filename << endl;
+
+    return nodes[0];
 }
 
 // Функция для печати списка. Только для отладки.
